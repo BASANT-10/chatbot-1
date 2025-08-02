@@ -1,56 +1,105 @@
-import streamlit as st
-from openai import OpenAI
+# STEP 0: Install required packages
+!pip install -q pandas matplotlib wordcloud
 
-# Show title and description.
-st.title("💬 Chatbot")
-st.write(
-    "This is a simple chatbot that uses OpenAI's GPT-3.5 model to generate responses. "
-    "To use this app, you need to provide an OpenAI API key, which you can get [here](https://platform.openai.com/account/api-keys). "
-    "You can also learn how to build this app step by step by [following our tutorial](https://docs.streamlit.io/develop/tutorials/llms/build-conversational-apps)."
-)
+# STEP 1: Imports
+import pandas as pd
+import numpy as np
+from collections import Counter
+from wordcloud import WordCloud
+import matplotlib.pyplot as plt
+import re, ast
+from google.colab import files
+import io
 
-# Ask user for their OpenAI API key via `st.text_input`.
-# Alternatively, you can store the API key in `./.streamlit/secrets.toml` and access it
-# via `st.secrets`, see https://docs.streamlit.io/develop/concepts/connections/secrets-management
-openai_api_key = st.text_input("OpenAI API Key", type="password")
-if not openai_api_key:
-    st.info("Please add your OpenAI API key to continue.", icon="🗝️")
+# STEP 2: Choose tactic
+print("🎯 Choose a marketing tactic from the options below:")
+default_tactics = {
+    "urgency_marketing": ['now', 'today', 'limited', 'hurry', 'exclusive'],
+    "social_proof": ['bestseller', 'popular', 'trending', 'recommended'],
+    "discount_marketing": ['sale', 'discount', 'deal', 'free', 'offer']
+}
+
+for i, tactic in enumerate(default_tactics):
+    print(f"{i}. {tactic}")
+
+tactic_idx = int(input("Enter the number of your chosen tactic: "))
+tactic_name = list(default_tactics.keys())[tactic_idx]
+print(f"✅ Selected tactic: {tactic_name}")
+
+# STEP 3: Upload CSV
+print("\n📁 Upload your CSV file:")
+uploaded = files.upload()
+df = pd.read_csv(io.BytesIO(list(uploaded.values())[0]))
+print("✅ File uploaded. First few rows:")
+display(df.head())
+
+# STEP 4: Select column
+print("\n📋 Available columns:")
+for i, col in enumerate(df.columns):
+    print(f"{i}. {col}")
+col_idx = int(input("Enter the column number containing the text to analyze: "))
+text_col = df.columns[col_idx]
+print(f"✅ Selected column: {text_col}")
+
+# STEP 5: Clean text and extract top keywords
+def clean_text(text):
+    return re.sub(r'[^a-zA-Z0-9\s]', '', str(text).lower())
+
+df['cleaned_text'] = df[text_col].apply(clean_text)
+
+# Generate top keywords
+all_words = ' '.join(df['cleaned_text']).split()
+word_freq = pd.Series(all_words).value_counts()
+top_words = word_freq[word_freq > 1].head(20)
+print("\n🔍 Top keywords in your data:")
+print(top_words)
+
+# STEP 6: Build editable dictionary
+print("\n🧠 Auto-suggesting dictionary from top words for tactic:", tactic_name)
+generated_dict = {tactic_name: set(top_words.index.tolist())}
+print("🛠️ Generated dictionary:", generated_dict)
+
+edit_dict = input("✏️ Would you like to edit the dictionary? (y/n): ").strip().lower()
+if edit_dict == 'y':
+    print("Enter your custom dictionary in Python format like:")
+    print("{'urgency_marketing': {'now', 'hurry'}}")
+    custom_dict_str = input("Paste your dictionary here:\n")
+    dictionary = ast.literal_eval(custom_dict_str)
 else:
+    dictionary = generated_dict
 
-    # Create an OpenAI client.
-    client = OpenAI(api_key=openai_api_key)
+print("✅ Final dictionary used:", dictionary)
 
-    # Create a session state variable to store the chat messages. This ensures that the
-    # messages persist across reruns.
-    if "messages" not in st.session_state:
-        st.session_state.messages = []
+# STEP 7: Classify text
+def classify(text, search_dict):
+    categories = []
+    for cat, terms in search_dict.items():
+        if any(term in text.split() for term in terms):
+            categories.append(cat)
+    return categories if categories else ['uncategorized']
 
-    # Display the existing chat messages via `st.chat_message`.
-    for message in st.session_state.messages:
-        with st.chat_message(message["role"]):
-            st.markdown(message["content"])
+df['categories'] = df['cleaned_text'].apply(lambda x: classify(x, dictionary))
 
-    # Create a chat input field to allow the user to enter a message. This will display
-    # automatically at the bottom of the page.
-    if prompt := st.chat_input("What is up?"):
+# STEP 8: Show results
+print("\n📊 Category frequencies:")
+category_counts = pd.Series([cat for cats in df['categories'] for cat in cats]).value_counts()
+print(category_counts)
 
-        # Store and display the current prompt.
-        st.session_state.messages.append({"role": "user", "content": prompt})
-        with st.chat_message("user"):
-            st.markdown(prompt)
+print("\n🔑 Top keywords:")
+print(top_words)
 
-        # Generate a response using the OpenAI API.
-        stream = client.chat.completions.create(
-            model="gpt-3.5-turbo",
-            messages=[
-                {"role": m["role"], "content": m["content"]}
-                for m in st.session_state.messages
-            ],
-            stream=True,
-        )
+# STEP 9: WordCloud
+wc = WordCloud(width=800, height=400, background_color='white').generate(' '.join(all_words))
+plt.figure(figsize=(12, 6))
+plt.imshow(wc, interpolation='bilinear')
+plt.axis('off')
+plt.title("Word Cloud of Text Data")
+plt.show()
 
-        # Stream the response to the chat using `st.write_stream`, then store it in 
-        # session state.
-        with st.chat_message("assistant"):
-            response = st.write_stream(stream)
-        st.session_state.messages.append({"role": "assistant", "content": response})
+# STEP 10: Save results
+df.to_csv("classified_results.csv", index=False)
+category_counts.to_csv("category_frequencies.csv")
+top_words.to_csv("top_keywords.csv")
+files.download("classified_results.csv")
+files.download("category_frequencies.csv")
+files.download("top_keywords.csv")
